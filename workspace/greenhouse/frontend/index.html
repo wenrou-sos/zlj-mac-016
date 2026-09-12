@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大棚种植管理系统</title>
+<script src="/static/vue.global.prod.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f4f0; color: #2c3e2f; }
+  header { background: linear-gradient(135deg, #2e7d32, #43a047); color: #fff; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  header h1 { font-size: 20px; }
+  .stats { display: flex; gap: 20px; font-size: 14px; }
+  .stats b { font-size: 18px; }
+  nav { background: #fff; padding: 0 24px; display: flex; gap: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  nav button { border: none; background: none; padding: 14px 18px; font-size: 15px; cursor: pointer; color: #666; border-bottom: 3px solid transparent; }
+  nav button.active { color: #2e7d32; border-bottom-color: #2e7d32; font-weight: 600; }
+  main { max-width: 1100px; margin: 20px auto; padding: 0 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: #fff; border-radius: 10px; padding: 18px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .card h3 { font-size: 16px; margin-bottom: 12px; display: flex; justify-content: space-between; }
+  .card h3 .crop { font-size: 13px; color: #888; font-weight: normal; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .metric { background: #f7faf7; border-radius: 8px; padding: 10px 12px; }
+  .metric .label { font-size: 12px; color: #888; }
+  .metric .value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .metric.bad .value { color: #d32f2f; }
+  .metric.bad { background: #fdecea; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  th, td { padding: 10px 14px; text-align: left; font-size: 14px; border-bottom: 1px solid #eee; }
+  th { background: #f5f8f5; color: #666; font-weight: 600; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
+  .tag.pending { background: #fff8e1; color: #f57f17; }
+  .tag.done { background: #e8f5e9; color: #2e7d32; }
+  .tag.cancelled { background: #eceff1; color: #90a4ae; }
+  .tag.warning { background: #fff3e0; color: #e65100; }
+  .tag.critical { background: #fdecea; color: #c62828; }
+  .tag.fertilize { background: #e3f2fd; color: #1565c0; }
+  .tag.water { background: #e0f7fa; color: #00838f; }
+  .tag.harvest { background: #f3e5f5; color: #6a1b9a; }
+  .btn { border: none; border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; background: #2e7d32; color: #fff; }
+  .btn.gray { background: #b0bec5; }
+  .btn.sm { padding: 4px 10px; }
+  form { background: #fff; border-radius: 10px; padding: 18px; margin-bottom: 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  form label { font-size: 13px; color: #666; display: block; margin-bottom: 4px; }
+  input, select { padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+  .empty { text-align: center; color: #999; padding: 30px; background: #fff; border-radius: 10px; }
+  canvas { width: 100%; height: 220px; }
+  .section-title { margin: 20px 0 10px; font-size: 16px; }
+  .alert-banner { background: #fdecea; border: 1px solid #ef9a9a; color: #c62828; border-radius: 8px; padding: 10px 16px; margin-bottom: 14px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🌱 大棚种植管理系统</h1>
+    <div class="stats">
+      <span>活动告警 <b>{{ dash.active_alerts ?? '-' }}</b></span>
+      <span>待办任务 <b>{{ dash.pending_tasks ?? '-' }}</b></span>
+      <span>今日灌溉 <b>{{ dash.today_irrigation_l ?? '-' }}</b> L</span>
+    </div>
+  </header>
+
+  <nav>
+    <button v-for="t in tabs" :key="t.key" :class="{active: tab===t.key}" @click="tab=t.key">{{ t.name }}</button>
+  </nav>
+
+  <main>
+    <div v-if="activeAlerts.length" class="alert-banner">
+      ⚠️ 当前有 {{ activeAlerts.length }} 条未处理告警，请及时查看「告警」页并安排工作人员处理！
+    </div>
+
+    <!-- 概览 -->
+    <div v-if="tab==='overview'">
+      <div class="cards">
+        <div class="card" v-for="r in latest" :key="r.greenhouse_id">
+          <h3>{{ r.greenhouse_name }} <span class="crop">{{ r.crop }}</span></h3>
+          <div class="metrics">
+            <div class="metric" :class="{bad: outOfRange('temperature', r.temperature)}">
+              <div class="label">温度</div><div class="value">{{ r.temperature }} ℃</div>
+            </div>
+            <div class="metric" :class="{bad: outOfRange('humidity', r.humidity)}">
+              <div class="label">空气湿度</div><div class="value">{{ r.humidity }} %</div>
+            </div>
+            <div class="metric" :class="{bad: outOfRange('soil_moisture', r.soil_moisture)}">
+              <div class="label">土壤湿度</div><div class="value">{{ r.soil_moisture }} %</div>
+            </div>
+            <div class="metric">
+              <div class="label">光照</div><div class="value">{{ Math.round(r.light) }} lux</div>
+            </div>
+          </div>
+          <div style="font-size:12px;color:#999;margin-top:8px">更新于 {{ r.created_at }}</div>
+        </div>
+      </div>
+
+      <h3 class="section-title">环境趋势</h3>
+      <div class="card">
+        <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <select v-model="chartGh">
+            <option v-for="g in greenhouses" :key="g.id" :value="g.id">{{ g.name }}</option>
+          </select>
+          <select v-model="chartMetric">
+            <option value="temperature">温度</option>
+            <option value="humidity">空气湿度</option>
+            <option value="soil_moisture">土壤湿度</option>
+            <option value="light">光照</option>
+          </select>
+        </div>
+        <canvas ref="chartCanvas" width="1000" height="220"></canvas>
+      </div>
+    </div>
+
+    <!-- 任务 -->
+    <div v-if="tab==='tasks'">
+      <form @submit.prevent="addTask">
+        <div><label>类型</label>
+          <select v-model="taskForm.task_type">
+            <option value="water">浇水</option>
+            <option value="fertilize">施肥</option>
+            <option value="harvest">采收</option>
+          </select></div>
+        <div><label>大棚</label>
+          <select v-model="taskForm.greenhouse_id">
+            <option v-for="g in greenhouses" :key="g.id" :value="g.id">{{ g.name }}（{{ g.crop }}）</option>
+          </select></div>
+        <div><label>计划日期</label><input type="date" v-model="taskForm.planned_date" required></div>
+        <div style="flex:1;min-width:180px"><label>任务说明</label><input v-model="taskForm.title" placeholder="如：追施钾肥" required style="width:100%"></div>
+        <button class="btn">添加任务</button>
+      </form>
+      <table v-if="tasks.length">
+        <thead><tr><th>类型</th><th>任务</th><th>大棚</th><th>计划日期</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr v-for="t in tasks" :key="t.id">
+            <td><span class="tag" :class="t.task_type">{{ taskTypeName(t.task_type) }}</span></td>
+            <td>{{ t.title }}</td>
+            <td>{{ t.greenhouse_name }}</td>
+            <td>{{ t.planned_date }}</td>
+            <td><span class="tag" :class="t.status">{{ statusName(t.status) }}</span></td>
+            <td>
+              <button v-if="t.status==='pending'" class="btn sm" @click="setTaskStatus(t.id,'done')">完成</button>
+              <button v-if="t.status==='pending'" class="btn sm gray" @click="setTaskStatus(t.id,'cancelled')">取消</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty">暂无任务</div>
+    </div>
+
+    <!-- 灌溉 -->
+    <div v-if="tab==='irrigation'">
+      <form @submit.prevent="addIrrigation">
+        <div><label>大棚</label>
+          <select v-model="irrForm.greenhouse_id">
+            <option v-for="g in greenhouses" :key="g.id" :value="g.id">{{ g.name }}（{{ g.crop }}）</option>
+          </select></div>
+        <div><label>灌溉量（升）</label><input type="number" min="1" step="0.5" v-model.number="irrForm.amount_l" required></div>
+        <div><label>方式</label>
+          <select v-model="irrForm.method">
+            <option>滴灌</option><option>喷灌</option><option>漫灌</option>
+          </select></div>
+        <div><label>备注</label><input v-model="irrForm.note" placeholder="可选"></div>
+        <button class="btn">记录灌溉</button>
+      </form>
+      <table v-if="irrigations.length">
+        <thead><tr><th>时间</th><th>大棚</th><th>灌溉量</th><th>方式</th><th>备注</th></tr></thead>
+        <tbody>
+          <tr v-for="r in irrigations" :key="r.id">
+            <td>{{ r.created_at }}</td><td>{{ r.greenhouse_name }}</td>
+            <td>{{ r.amount_l }} L</td><td>{{ r.method }}</td><td>{{ r.note || '-' }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty">暂无灌溉记录</div>
+    </div>
+
+    <!-- 告警 -->
+    <div v-if="tab==='alerts'">
+      <table v-if="alerts.length">
+        <thead><tr><th>时间</th><th>大棚</th><th>级别</th><th>内容</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr v-for="a in alerts" :key="a.id">
+            <td>{{ a.created_at }}</td>
+            <td>{{ a.greenhouse_name }}</td>
+            <td><span class="tag" :class="a.level">{{ a.level==='critical'?'严重':'警告' }}</span></td>
+            <td>{{ a.message }}</td>
+            <td><span class="tag" :class="a.status==='active'?'critical':'done'">{{ a.status==='active'?'未处理':'已处理' }}</span></td>
+            <td><button v-if="a.status==='active'" class="btn sm" @click="resolveAlert(a.id)">标记处理</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty">暂无告警，一切正常 🎉</div>
+    </div>
+  </main>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted, watch, nextTick } = Vue;
+
+const RANGES = { temperature: [15, 32], humidity: [40, 85], soil_moisture: [20, 60] };
+
+createApp({
+  setup() {
+    const tabs = [
+      { key: 'overview', name: '环境概览' },
+      { key: 'tasks', name: '任务管理' },
+      { key: 'irrigation', name: '灌溉记录' },
+      { key: 'alerts', name: '告警中心' },
+    ];
+    const tab = ref('overview');
+    const greenhouses = ref([]);
+    const latest = ref([]);
+    const tasks = ref([]);
+    const irrigations = ref([]);
+    const alerts = ref([]);
+    const activeAlerts = ref([]);
+    const dash = ref({});
+    const chartGh = ref(1);
+    const chartMetric = ref('temperature');
+    const chartCanvas = ref(null);
+    const taskForm = reactive({ task_type: 'water', greenhouse_id: 1, planned_date: new Date().toISOString().slice(0, 10), title: '' });
+    const irrForm = reactive({ greenhouse_id: 1, amount_l: 100, method: '滴灌', note: '' });
+
+    const api = async (url, opts) => {
+      const res = await fetch(url, opts && {
+        method: opts.method,
+        headers: { 'Content-Type': 'application/json' },
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    };
+
+    const refresh = async () => {
+      [greenhouses.value, latest.value, tasks.value, irrigations.value, alerts.value, dash.value] =
+        await Promise.all([
+          api('/api/greenhouses'), api('/api/sensors/latest'), api('/api/tasks'),
+          api('/api/irrigation'), api('/api/alerts'), api('/api/dashboard'),
+        ]);
+      activeAlerts.value = alerts.value.filter(a => a.status === 'active');
+      if (tab.value === 'overview') drawChart();
+    };
+
+    const outOfRange = (m, v) => RANGES[m] && (v < RANGES[m][0] || v > RANGES[m][1]);
+    const taskTypeName = t => ({ water: '浇水', fertilize: '施肥', harvest: '采收' }[t]);
+    const statusName = s => ({ pending: '待执行', done: '已完成', cancelled: '已取消' }[s]);
+
+    const addTask = async () => {
+      await api('/api/tasks', { method: 'POST', body: taskForm });
+      taskForm.title = '';
+      refresh();
+    };
+    const setTaskStatus = async (id, status) => {
+      await api(`/api/tasks/${id}`, { method: 'PATCH', body: { status } });
+      refresh();
+    };
+    const addIrrigation = async () => {
+      await api('/api/irrigation', { method: 'POST', body: irrForm });
+      irrForm.note = '';
+      refresh();
+    };
+    const resolveAlert = async (id) => {
+      await api(`/api/alerts/${id}/resolve`, { method: 'POST' });
+      refresh();
+    };
+
+    // 简易折线图
+    const drawChart = async () => {
+      await nextTick();
+      const canvas = chartCanvas.value;
+      if (!canvas) return;
+      const data = await api(`/api/sensors/history?greenhouse_id=${chartGh.value}&limit=120`);
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height, pad = 40;
+      ctx.clearRect(0, 0, W, H);
+      if (data.length < 2) {
+        ctx.fillStyle = '#999'; ctx.font = '14px sans-serif';
+        ctx.fillText('数据采集中，请稍候…', W / 2 - 80, H / 2);
+        return;
+      }
+      const vals = data.map(d => d[chartMetric.value]);
+      let min = Math.min(...vals), max = Math.max(...vals);
+      if (min === max) { min -= 1; max += 1; }
+      const x = i => pad + (W - 2 * pad) * i / (data.length - 1);
+      const y = v => H - pad - (H - 2 * pad) * (v - min) / (max - min);
+      // 网格与刻度
+      ctx.strokeStyle = '#e0e0e0'; ctx.fillStyle = '#888'; ctx.font = '11px sans-serif';
+      for (let i = 0; i <= 4; i++) {
+        const v = min + (max - min) * i / 4, yy = y(v);
+        ctx.beginPath(); ctx.moveTo(pad, yy); ctx.lineTo(W - pad, yy); ctx.stroke();
+        ctx.fillText(v.toFixed(0), 4, yy + 4);
+      }
+      // 折线
+      ctx.strokeStyle = '#43a047'; ctx.lineWidth = 2; ctx.beginPath();
+      vals.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
+      ctx.stroke();
+      // 最新值标注
+      ctx.fillStyle = '#2e7d32'; ctx.font = '13px sans-serif';
+      ctx.fillText(`最新：${vals[vals.length - 1]}`, W - pad - 90, y(vals[vals.length - 1]) - 8);
+    };
+
+    watch([chartGh, chartMetric], drawChart);
+    watch(tab, t => { if (t === 'overview') drawChart(); });
+
+    onMounted(() => {
+      refresh();
+      setInterval(refresh, 10000);  // 每 10 秒自动刷新
+    });
+
+    return { tabs, tab, greenhouses, latest, tasks, irrigations, alerts, activeAlerts, dash,
+             chartGh, chartMetric, chartCanvas, taskForm, irrForm,
+             outOfRange, taskTypeName, statusName, addTask, setTaskStatus, addIrrigation, resolveAlert };
+  },
+}).mount('#app');
+</script>
+</body>
+</html>
