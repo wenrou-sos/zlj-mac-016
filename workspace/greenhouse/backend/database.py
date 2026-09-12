@@ -52,6 +52,10 @@ CREATE TABLE IF NOT EXISTS alerts (
     message TEXT NOT NULL,
     value REAL NOT NULL,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'resolved')),
+    notified TEXT NOT NULL DEFAULT 'none' CHECK (notified IN ('none', 'sent', 'failed')),
+    notify_error TEXT DEFAULT '',
+    handler TEXT DEFAULT '',        -- 处理人
+    handle_note TEXT DEFAULT '',    -- 处理备注/结论
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     resolved_at TEXT
 );
@@ -69,6 +73,16 @@ def init_db():
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
+        # 兼容旧库：为 alerts 表补充通知与处理字段
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)")}
+        for col, ddl in {
+            "notified": "ALTER TABLE alerts ADD COLUMN notified TEXT NOT NULL DEFAULT 'none'",
+            "notify_error": "ALTER TABLE alerts ADD COLUMN notify_error TEXT DEFAULT ''",
+            "handler": "ALTER TABLE alerts ADD COLUMN handler TEXT DEFAULT ''",
+            "handle_note": "ALTER TABLE alerts ADD COLUMN handle_note TEXT DEFAULT ''",
+        }.items():
+            if col not in cols:
+                conn.execute(ddl)
         # 首次运行写入默认大棚
         if conn.execute("SELECT COUNT(*) FROM greenhouses").fetchone()[0] == 0:
             conn.executemany(

@@ -1,6 +1,7 @@
 """大棚种植管理系统 API 服务"""
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -9,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from database import get_conn, init_db
+from notifier import load_config, save_config, send_alert_notification
 from simulator import simulate_once
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -53,6 +55,31 @@ class TaskIn(BaseModel):
 
 class TaskUpdate(BaseModel):
     status: str = Field(pattern="^(pending|done|cancelled)$")
+
+
+class ResolveIn(BaseModel):
+    handler: str = ""
+    note: str = ""
+
+
+class HandleIn(BaseModel):
+    handler: str
+    note: str = ""
+
+
+class SmtpConfig(BaseModel):
+    host: str = ""
+    port: int = 465
+    username: str = ""
+    password: str = ""
+    sender: str = ""
+    recipients: str = ""
+    use_tls: bool = True
+
+
+class NotifyConfigIn(BaseModel):
+    webhook_url: str = ""
+    smtp: SmtpConfig = SmtpConfig()
 
 
 # ---------- 大棚与传感器 ----------
@@ -198,14 +225,18 @@ def list_alerts(status: str | None = None, limit: int = 100):
 
 
 @app.post("/api/alerts/{alert_id}/resolve")
-def resolve_alert(alert_id: int):
+def resolve_alert(alert_id: int, payload: ResolveIn | None = None):
+    """标记处理，可同时记录处理人和处理备注"""
+    handler = payload.handler if payload else ""
+    note = payload.note if payload else ""
     conn = get_conn()
     try:
         cur = conn.execute(
             """UPDATE alerts SET status='resolved',
-               resolved_at=datetime('now', 'localtime')
+               resolved_at=datetime('now', 'localtime'),
+               handler=?, handle_note=?
                WHERE id=? AND status='active'""",
-            (alert_id,),
+            (handler, note, alert_id),
         )
         conn.commit()
         if cur.rowcount == 0:
@@ -213,6 +244,57 @@ def resolve_alert(alert_id: int):
         return {"ok": True}
     finally:
         conn.close()
+
+
+@app.patch("/api/alerts/{alert_id}/handle")
+def update_handle(alert_id: int, body: HandleIn):
+    """补记/修改处理人和处理备注（已处理的告警也可更新）"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "UPDATE alerts SET handler=?, handle_note=? WHERE id=?",
+            (body.handler, body.note, alert_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "告警不存在")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+# ---------- 通知渠道配置 ----------
+
+@app.get("/api/notify/config")
+def get_notify_config():
+    cfg = load_config()
+    if cfg["smtp"].get("password"):
+        cfg["smtp"]["password"] = "***"  # 不回显密码
+    return cfg
+
+
+@app.put("/api/notify/config")
+def put_notify_config(body: NotifyConfigIn):
+    cfg = body.model_dump()
+    if cfg["smtp"].get("password") == "***":
+        cfg["smtp"]["password"] = load_config()["smtp"].get("password", "")
+    save_config(cfg)
+    return {"ok": True}
+
+
+@app.post("/api/notify/test")
+def test_notify():
+    """发送一条测试通知，用于验证渠道配置"""
+    status, error = send_alert_notification({
+        "greenhouse_name": "测试棚",
+        "metric_name": "温度",
+        "level": "warning",
+        "value": 0,
+        "unit": "℃",
+        "message": "这是一条测试通知，请忽略",
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    return {"status": status, "error": error}
 
 
 # ---------- 概览统计 ----------

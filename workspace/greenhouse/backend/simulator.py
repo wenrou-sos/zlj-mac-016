@@ -4,6 +4,7 @@ import random
 from datetime import datetime
 
 from database import get_conn
+from notifier import send_alert_notification
 
 # 各指标正常范围阈值 (min, max)；超出即告警
 THRESHOLDS = {
@@ -116,6 +117,7 @@ def save_reading_and_alerts(reading: dict):
         prev_metrics = (
             {p["metric"] for p in check_thresholds(dict(prev))} if prev else set()
         )
+        new_alert_ids: list[int] = []
 
         for metric in THRESHOLDS:
             active = conn.execute(
@@ -126,17 +128,18 @@ def save_reading_and_alerts(reading: dict):
             if metric in problems:
                 p = problems[metric]
                 if active:
-                    # 读数恶化/好转时同步更新进行中的告警
+                    # 读数恶化/好转时同步更新进行中的告警（不重复推送）
                     conn.execute(
                         "UPDATE alerts SET level=?, message=?, value=? WHERE id=?",
                         (p["level"], p["message"], p["value"], active["id"]),
                     )
                 elif metric not in prev_metrics:
-                    conn.execute(
+                    cur = conn.execute(
                         """INSERT INTO alerts (greenhouse_id, metric, level, message, value)
                            VALUES (?, ?, ?, ?, ?)""",
                         (reading["greenhouse_id"], metric, p["level"], p["message"], p["value"]),
                     )
+                    new_alert_ids.append(cur.lastrowid)
             elif active:
                 conn.execute(
                     """UPDATE alerts SET status='resolved',
@@ -144,6 +147,27 @@ def save_reading_and_alerts(reading: dict):
                     (active["id"],),
                 )
         conn.commit()
+
+        # 新告警推送外部渠道（同一轮越限只在此提醒一次）；
+        # 推送失败或未配置只记录状态，不影响告警本身
+        for alert_id in new_alert_ids:
+            try:
+                row = conn.execute(
+                    """SELECT a.*, g.name AS greenhouse_name FROM alerts a
+                       JOIN greenhouses g ON g.id=a.greenhouse_id WHERE a.id=?""",
+                    (alert_id,),
+                ).fetchone()
+                info = dict(row)
+                info["metric_name"] = METRIC_NAMES[info["metric"]]
+                info["unit"] = METRIC_UNITS[info["metric"]]
+                status, error = send_alert_notification(info)
+                conn.execute(
+                    "UPDATE alerts SET notified=?, notify_error=? WHERE id=?",
+                    (status, error, alert_id),
+                )
+                conn.commit()
+            except Exception:
+                pass  # 通知环节任何异常都不影响主流程
     finally:
         conn.close()
 

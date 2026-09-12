@@ -48,6 +48,21 @@
   canvas { width: 100%; height: 220px; }
   .section-title { margin: 20px 0 10px; font-size: 16px; }
   .alert-banner { background: #fdecea; border: 1px solid #ef9a9a; color: #c62828; border-radius: 8px; padding: 10px 16px; margin-bottom: 14px; font-size: 14px; }
+  .tag.sent { background: #e8f5e9; color: #2e7d32; }
+  .tag.failed { background: #fdecea; color: #c62828; }
+  .tag.none { background: #eceff1; color: #90a4ae; }
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .modal { background: #fff; border-radius: 10px; padding: 22px; width: 380px; }
+  .modal h3 { margin-bottom: 14px; font-size: 16px; }
+  .modal label { font-size: 13px; color: #666; display: block; margin: 10px 0 4px; }
+  .modal input, .modal textarea { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; font-family: inherit; }
+  .modal .actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 10px; }
+  .config-card { background: #fff; border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+  .config-card summary { cursor: pointer; font-size: 15px; font-weight: 600; color: #2e7d32; }
+  .config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 16px; margin-top: 12px; }
+  .config-grid label { font-size: 12px; color: #888; display: block; margin-bottom: 3px; }
+  .config-grid input { width: 100%; }
+  .notify-result { font-size: 13px; margin-left: 10px; }
 </style>
 </head>
 <body>
@@ -175,20 +190,72 @@
 
     <!-- 告警 -->
     <div v-if="tab==='alerts'">
+      <details class="config-card">
+        <summary>🔔 外部通知渠道配置（webhook / 邮件）</summary>
+        <div class="config-grid">
+          <div style="grid-column:1/-1"><label>Webhook URL（POST JSON，留空则不启用）</label>
+            <input v-model="notifyCfg.webhook_url" placeholder="https://example.com/hook"></div>
+          <div><label>SMTP 服务器</label><input v-model="notifyCfg.smtp.host" placeholder="smtp.example.com"></div>
+          <div><label>端口</label><input type="number" v-model.number="notifyCfg.smtp.port"></div>
+          <div><label>账号</label><input v-model="notifyCfg.smtp.username"></div>
+          <div><label>密码</label><input type="password" v-model="notifyCfg.smtp.password" placeholder="不修改请保留 ***"></div>
+          <div><label>发件人</label><input v-model="notifyCfg.smtp.sender"></div>
+          <div><label>收件人（逗号分隔）</label><input v-model="notifyCfg.smtp.recipients"></div>
+          <div style="display:flex;align-items:flex-end;gap:6px;padding-bottom:10px">
+            <input type="checkbox" id="tls" v-model="notifyCfg.smtp.use_tls" style="width:auto">
+            <label for="tls" style="margin:0">使用 SSL/TLS</label>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <button class="btn" @click="saveNotifyConfig">保存配置</button>
+          <button class="btn gray" style="margin-left:8px" @click="testNotify">发送测试通知</button>
+          <span class="notify-result" :style="{color: notifyTestOk ? '#2e7d32' : '#c62828'}">{{ notifyTestMsg }}</span>
+        </div>
+      </details>
+
       <table v-if="alerts.length">
-        <thead><tr><th>时间</th><th>大棚</th><th>级别</th><th>内容</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>时间</th><th>大棚</th><th>级别</th><th>内容</th><th>通知</th><th>处理人/备注</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="a in alerts" :key="a.id">
             <td>{{ a.created_at }}</td>
             <td>{{ a.greenhouse_name }}</td>
             <td><span class="tag" :class="a.level">{{ a.level==='critical'?'严重':'警告' }}</span></td>
             <td>{{ a.message }}</td>
+            <td>
+              <span class="tag" :class="a.notified" :title="a.notify_error || ''">
+                {{ {sent:'已推送', failed:'推送失败', none:'未推送'}[a.notified] }}
+              </span>
+              <div v-if="a.notified==='failed'" style="font-size:11px;color:#c62828;max-width:160px">{{ a.notify_error }}</div>
+            </td>
+            <td>
+              <template v-if="a.handler">{{ a.handler }}<div style="font-size:12px;color:#888">{{ a.handle_note }}</div></template>
+              <span v-else style="color:#bbb">—</span>
+            </td>
             <td><span class="tag" :class="a.status==='active'?'critical':'done'">{{ a.status==='active'?'未处理':'已处理' }}</span></td>
-            <td><button v-if="a.status==='active'" class="btn sm" @click="resolveAlert(a.id)">标记处理</button></td>
+            <td>
+              <button v-if="a.status==='active'" class="btn sm" @click="openHandle(a, true)">处理</button>
+              <button v-else class="btn sm gray" @click="openHandle(a, false)">补记</button>
+            </td>
           </tr>
         </tbody>
       </table>
       <div v-else class="empty">暂无告警，一切正常 🎉</div>
+    </div>
+
+    <!-- 处理/补记弹窗 -->
+    <div v-if="handleModal.show" class="modal-mask" @click.self="handleModal.show=false">
+      <div class="modal">
+        <h3>{{ handleModal.isResolve ? '处理告警' : '补记处理信息' }}</h3>
+        <div style="font-size:13px;color:#888">{{ handleModal.message }}</div>
+        <label>处理人</label>
+        <input v-model="handleModal.handler" placeholder="值班人员姓名">
+        <label>处理备注 / 结论</label>
+        <textarea v-model="handleModal.note" rows="3" placeholder="如：已开启风机降温，温度恢复中"></textarea>
+        <div class="actions">
+          <button class="btn gray" @click="handleModal.show=false">取消</button>
+          <button class="btn" @click="submitHandle">{{ handleModal.isResolve ? '确认处理' : '保存' }}</button>
+        </div>
+      </div>
     </div>
   </main>
 </div>
@@ -219,6 +286,10 @@ createApp({
     const chartCanvas = ref(null);
     const taskForm = reactive({ task_type: 'water', greenhouse_id: 1, planned_date: new Date().toISOString().slice(0, 10), title: '' });
     const irrForm = reactive({ greenhouse_id: 1, amount_l: 100, method: '滴灌', note: '' });
+    const notifyCfg = reactive({ webhook_url: '', smtp: { host: '', port: 465, username: '', password: '', sender: '', recipients: '', use_tls: true } });
+    const notifyTestMsg = ref('');
+    const notifyTestOk = ref(false);
+    const handleModal = reactive({ show: false, id: null, isResolve: true, message: '', handler: '', note: '' });
 
     const api = async (url, opts) => {
       const res = await fetch(url, opts && {
@@ -267,9 +338,39 @@ createApp({
       irrForm.note = '';
       refresh();
     };
-    const resolveAlert = async (id) => {
-      await api(`/api/alerts/${id}/resolve`, { method: 'POST' });
+    const openHandle = (a, isResolve) => {
+      Object.assign(handleModal, {
+        show: true, id: a.id, isResolve,
+        message: `${a.greenhouse_name} · ${a.message}`,
+        handler: a.handler || '', note: a.handle_note || '',
+      });
+    };
+    const submitHandle = async () => {
+      const body = { handler: handleModal.handler, note: handleModal.note };
+      if (handleModal.isResolve) {
+        await api(`/api/alerts/${handleModal.id}/resolve`, { method: 'POST', body });
+      } else {
+        await api(`/api/alerts/${handleModal.id}/handle`, { method: 'PATCH', body });
+      }
+      handleModal.show = false;
       refresh();
+    };
+    const loadNotifyConfig = async () => {
+      const cfg = await api('/api/notify/config');
+      notifyCfg.webhook_url = cfg.webhook_url;
+      Object.assign(notifyCfg.smtp, cfg.smtp);
+    };
+    const saveNotifyConfig = async () => {
+      await api('/api/notify/config', { method: 'PUT', body: notifyCfg });
+      notifyTestOk.value = true;
+      notifyTestMsg.value = '配置已保存';
+    };
+    const testNotify = async () => {
+      await saveNotifyConfig();
+      const r = await api('/api/notify/test', { method: 'POST' });
+      notifyTestOk.value = r.status === 'sent';
+      notifyTestMsg.value = r.status === 'sent' ? '✅ 测试通知已送达'
+        : r.status === 'none' ? '未配置任何外部渠道' : `❌ 推送失败：${r.error}`;
     };
 
     // 简易折线图
@@ -312,12 +413,15 @@ createApp({
 
     onMounted(() => {
       refresh();
+      loadNotifyConfig();
       setInterval(refresh, 10000);  // 每 10 秒自动刷新
     });
 
     return { tabs, tab, greenhouses, latest, tasks, irrigations, alerts, activeAlerts, dash,
              chartGh, chartMetric, chartCanvas, taskForm, irrForm,
-             outOfRange, taskTypeName, statusName, addTask, setTaskStatus, addIrrigation, resolveAlert };
+             notifyCfg, notifyTestMsg, notifyTestOk, handleModal,
+             outOfRange, taskTypeName, statusName, addTask, setTaskStatus, addIrrigation,
+             openHandle, submitHandle, saveNotifyConfig, testNotify };
   },
 }).mount('#app');
 </script>

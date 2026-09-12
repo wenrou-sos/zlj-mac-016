@@ -23,7 +23,30 @@ pip install fastapi "uvicorn[standard]"
 | 环境概览 | 各大棚实时温度/湿度/光照/土壤湿度卡片，越限标红；历史趋势折线图 |
 | 任务管理 | 安排施肥、浇水、采收任务，支持完成/取消 |
 | 灌溉记录 | 记录灌溉量、方式（滴灌/喷灌/漫灌） |
-| 告警中心 | 传感器越限自动生成告警（警告/严重两级），恢复后自动解除，也可人工标记处理 |
+| 告警中心 | 传感器越限自动生成告警（警告/严重两级），恢复后自动解除；处理时可登记处理人和处理备注，已处理的告警也可补记 |
+| 外部通知 | 新告警产生时推送到 Webhook 和/或邮件（SMTP），在告警中心顶部配置；同一轮越限只推送一次，恢复后再次越限才重新推送；未配置或推送失败不影响告警生成与解除，送达状态（已推送/推送失败/未推送）显示在告警记录中 |
+
+## 外部通知配置
+
+在「告警中心」顶部展开配置面板，或编辑 `backend/notify_config.json`：
+
+```json
+{
+  "webhook_url": "https://example.com/hook",
+  "smtp": {
+    "host": "smtp.example.com", "port": 465,
+    "username": "alert@example.com", "password": "xxx",
+    "sender": "alert@example.com",
+    "recipients": "staff1@example.com,staff2@example.com",
+    "use_tls": true
+  }
+}
+```
+
+- Webhook：POST JSON，含大棚、指标、当前值、级别、时间等字段
+- 邮件：SMTP_SSL（use_tls=false 时使用 STARTTLS）
+- 两个渠道可同时启用，任一送达即视为已推送
+- `POST /api/notify/test` 可发送测试通知验证配置
 
 ## 告警阈值（`backend/simulator.py` 中 `THRESHOLDS` 可调）
 
@@ -41,7 +64,9 @@ greenhouse/
 ├── backend/
 │   ├── main.py        # FastAPI 应用与 API 路由
 │   ├── database.py    # SQLite 建表与连接
-│   ├── simulator.py   # 传感器模拟 + 阈值告警
+│   ├── simulator.py   # 传感器模拟 + 阈值告警 + 触发外部推送
+│   ├── notifier.py    # Webhook / 邮件通知渠道
+│   ├── notify_config.json  # 通知渠道配置（页面保存后生成）
 │   └── greenhouse.db  # 数据库文件（首次运行自动创建）
 ├── frontend/
 │   ├── index.html     # Vue 单页应用
@@ -55,5 +80,6 @@ greenhouse/
 - `GET /api/sensors/history?greenhouse_id=1&limit=60` 历史数据
 - `GET/POST /api/tasks`，`PATCH /api/tasks/{id}` 任务管理
 - `GET/POST /api/irrigation` 灌溉记录
-- `GET /api/alerts`，`POST /api/alerts/{id}/resolve` 告警
+- `GET /api/alerts`，`POST /api/alerts/{id}/resolve`（可带处理人/备注），`PATCH /api/alerts/{id}/handle` 补记
+- `GET/PUT /api/notify/config`，`POST /api/notify/test` 通知渠道
 - `GET /api/dashboard` 概览统计
