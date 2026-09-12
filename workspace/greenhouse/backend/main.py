@@ -138,9 +138,17 @@ def update_greenhouse(gh_id: int, body: GreenhouseUpdate):
     conn = get_conn()
     try:
         cur = conn.execute(f"UPDATE greenhouses SET {', '.join(updates)} WHERE id=?", params)
-        conn.commit()
         if cur.rowcount == 0:
             raise HTTPException(404, "大棚不存在")
+        if body.active is False:
+            # 停用后不再采集，其活动告警永远不会等到恢复读数，直接自动解除
+            conn.execute(
+                """UPDATE alerts SET status='resolved',
+                   resolved_at=datetime('now', 'localtime')
+                   WHERE greenhouse_id=? AND status='active'""",
+                (gh_id,),
+            )
+        conn.commit()
         return {"ok": True}
     finally:
         conn.close()
@@ -194,10 +202,20 @@ def list_irrigation(limit: int = 50):
         conn.close()
 
 
+def _require_active_greenhouse(conn, greenhouse_id: int):
+    """校验大棚存在且处于启用状态，否则拒绝写入"""
+    row = conn.execute("SELECT active FROM greenhouses WHERE id=?", (greenhouse_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "大棚不存在")
+    if not row["active"]:
+        raise HTTPException(400, "大棚已停用，不能新增任务或灌溉记录")
+
+
 @app.post("/api/irrigation", status_code=201)
 def add_irrigation(body: IrrigationIn):
     conn = get_conn()
     try:
+        _require_active_greenhouse(conn, body.greenhouse_id)
         cur = conn.execute(
             "INSERT INTO irrigation_records (greenhouse_id, amount_l, method, note) VALUES (?, ?, ?, ?)",
             (body.greenhouse_id, body.amount_l, body.method, body.note),
@@ -230,6 +248,7 @@ def list_tasks(status: str | None = None):
 def add_task(body: TaskIn):
     conn = get_conn()
     try:
+        _require_active_greenhouse(conn, body.greenhouse_id)
         cur = conn.execute(
             """INSERT INTO tasks (task_type, title, greenhouse_id, planned_date, note)
                VALUES (?, ?, ?, ?, ?)""",

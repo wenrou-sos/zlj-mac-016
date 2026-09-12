@@ -351,6 +351,10 @@ createApp({
           api('/api/irrigation'), api('/api/alerts'), api('/api/dashboard'),
         ]);
       activeAlerts.value = alerts.value.filter(a => a.status === 'active');
+      // 若表单中选中的大棚刚被停用，改选第一个启用中的大棚，避免提交到已停用的棚
+      const ids = activeGreenhouses.value.map(g => g.id);
+      if (ids.length && !ids.includes(taskForm.greenhouse_id)) taskForm.greenhouse_id = ids[0];
+      if (ids.length && !ids.includes(irrForm.greenhouse_id)) irrForm.greenhouse_id = ids[0];
       if (tab.value === 'overview') drawChart();
     };
 
@@ -368,18 +372,22 @@ createApp({
     const statusName = s => ({ pending: '待执行', done: '已完成', cancelled: '已取消' }[s]);
 
     const addTask = async () => {
-      await api('/api/tasks', { method: 'POST', body: taskForm });
-      taskForm.title = '';
-      refresh();
+      try {
+        await api('/api/tasks', { method: 'POST', body: taskForm });
+        taskForm.title = '';
+        refresh();
+      } catch (e) { alert('添加任务失败：' + e.message); }
     };
     const setTaskStatus = async (id, status) => {
       await api(`/api/tasks/${id}`, { method: 'PATCH', body: { status } });
       refresh();
     };
     const addIrrigation = async () => {
-      await api('/api/irrigation', { method: 'POST', body: irrForm });
-      irrForm.note = '';
-      refresh();
+      try {
+        await api('/api/irrigation', { method: 'POST', body: irrForm });
+        irrForm.note = '';
+        refresh();
+      } catch (e) { alert('记录灌溉失败：' + e.message); }
     };
     const openHandle = (a, isResolve) => {
       Object.assign(handleModal, {
