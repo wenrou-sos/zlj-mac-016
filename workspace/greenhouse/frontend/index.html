@@ -85,7 +85,7 @@
             <div class="metric" :class="{bad: outOfRange('soil_moisture', r.soil_moisture)}">
               <div class="label">土壤湿度</div><div class="value">{{ r.soil_moisture }} %</div>
             </div>
-            <div class="metric">
+            <div class="metric" :class="{bad: outOfRange('light', r.light)}">
               <div class="label">光照</div><div class="value">{{ Math.round(r.light) }} lux</div>
             </div>
           </div>
@@ -196,7 +196,7 @@
 <script>
 const { createApp, ref, reactive, onMounted, watch, nextTick } = Vue;
 
-const RANGES = { temperature: [15, 32], humidity: [40, 85], soil_moisture: [20, 60] };
+const RANGES = { temperature: [15, 32], humidity: [40, 85], soil_moisture: [20, 60], light: [2000, 80000] };
 
 createApp({
   setup() {
@@ -240,7 +240,16 @@ createApp({
       if (tab.value === 'overview') drawChart();
     };
 
-    const outOfRange = (m, v) => RANGES[m] && (v < RANGES[m][0] || v > RANGES[m][1]);
+    const outOfRange = (m, v) => {
+      const r = RANGES[m];
+      if (!r) return false;
+      // 光照仅白天 6:00-20:00 检查，与后端告警规则一致
+      if (m === 'light') {
+        const h = new Date().getHours();
+        if (h < 6 || h >= 20) return false;
+      }
+      return v < r[0] || v > r[1];
+    };
     const taskTypeName = t => ({ water: '浇水', fertilize: '施肥', harvest: '采收' }[t]);
     const statusName = s => ({ pending: '待执行', done: '已完成', cancelled: '已取消' }[s]);
 

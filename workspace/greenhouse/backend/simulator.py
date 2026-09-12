@@ -90,17 +90,32 @@ def check_thresholds(reading: dict) -> list[dict]:
 
 
 def save_reading_and_alerts(reading: dict):
-    """写入读数，越限时生成告警（同一大棚同一指标已有活动告警则不重复），恢复正常自动解除"""
+    """写入读数并维护告警：
+    - 越限且已有活动告警：更新告警的数值/级别/信息（跟随最新读数）
+    - 越限且上一周期该指标正常：新建告警（人工处理后若越限持续，不重复弹出）
+    - 恢复正常：自动解除活动告警
+    """
     conn = get_conn()
     try:
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO sensor_readings
                (greenhouse_id, temperature, humidity, light, soil_moisture)
                VALUES (?, ?, ?, ?, ?)""",
             (reading["greenhouse_id"], reading["temperature"], reading["humidity"],
              reading["light"], reading["soil_moisture"]),
         )
+        reading_id = cur.lastrowid
         problems = {p["metric"]: p for p in check_thresholds(reading)}
+
+        # 上一条读数的越限情况，用于判断是否为“新发生”的越限
+        prev = conn.execute(
+            """SELECT * FROM sensor_readings
+               WHERE greenhouse_id=? AND id<? ORDER BY id DESC LIMIT 1""",
+            (reading["greenhouse_id"], reading_id),
+        ).fetchone()
+        prev_metrics = (
+            {p["metric"] for p in check_thresholds(dict(prev))} if prev else set()
+        )
 
         for metric in THRESHOLDS:
             active = conn.execute(
@@ -109,8 +124,14 @@ def save_reading_and_alerts(reading: dict):
                 (reading["greenhouse_id"], metric),
             ).fetchone()
             if metric in problems:
-                if not active:
-                    p = problems[metric]
+                p = problems[metric]
+                if active:
+                    # 读数恶化/好转时同步更新进行中的告警
+                    conn.execute(
+                        "UPDATE alerts SET level=?, message=?, value=? WHERE id=?",
+                        (p["level"], p["message"], p["value"], active["id"]),
+                    )
+                elif metric not in prev_metrics:
                     conn.execute(
                         """INSERT INTO alerts (greenhouse_id, metric, level, message, value)
                            VALUES (?, ?, ?, ?, ?)""",
