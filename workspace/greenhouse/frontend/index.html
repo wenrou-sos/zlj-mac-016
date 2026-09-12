@@ -347,13 +347,26 @@ createApp({
     };
     const submitHandle = async () => {
       const body = { handler: handleModal.handler, note: handleModal.note };
-      if (handleModal.isResolve) {
-        await api(`/api/alerts/${handleModal.id}/resolve`, { method: 'POST', body });
-      } else {
-        await api(`/api/alerts/${handleModal.id}/handle`, { method: 'PATCH', body });
+      try {
+        if (handleModal.isResolve) {
+          try {
+            await api(`/api/alerts/${handleModal.id}/resolve`, { method: 'POST', body });
+          } catch (e) {
+            // 告警可能刚被自动解除（页面每 10s 刷新存在竞态），降级为补记处理信息
+            await api(`/api/alerts/${handleModal.id}/handle`, { method: 'PATCH', body });
+            handleModal.show = false;
+            alert('该告警已被自动解除，处理人和备注已补记到记录中');
+            refresh();
+            return;
+          }
+        } else {
+          await api(`/api/alerts/${handleModal.id}/handle`, { method: 'PATCH', body });
+        }
+        handleModal.show = false;
+        refresh();
+      } catch (e) {
+        alert('操作失败，请重试：' + e.message);
       }
-      handleModal.show = false;
-      refresh();
     };
     const loadNotifyConfig = async () => {
       const cfg = await api('/api/notify/config');

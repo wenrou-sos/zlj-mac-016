@@ -18,9 +18,9 @@ SIMULATE_INTERVAL = 10  # 秒
 
 
 async def simulator_loop():
-    """后台任务：周期性模拟传感器采集"""
+    """后台任务：周期性模拟传感器采集（在线程池执行，避免推送超时阻塞事件循环）"""
     while True:
-        simulate_once()
+        await asyncio.to_thread(simulate_once)
         await asyncio.sleep(SIMULATE_INTERVAL)
 
 
@@ -283,9 +283,9 @@ def put_notify_config(body: NotifyConfigIn):
 
 
 @app.post("/api/notify/test")
-def test_notify():
-    """发送一条测试通知，用于验证渠道配置"""
-    status, error = send_alert_notification({
+async def test_notify():
+    """发送一条测试通知，用于验证渠道配置（线程池执行，不阻塞其他请求）"""
+    status, error = await asyncio.to_thread(send_alert_notification, {
         "greenhouse_name": "测试棚",
         "metric_name": "温度",
         "level": "warning",
