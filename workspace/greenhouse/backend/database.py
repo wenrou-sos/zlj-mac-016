@@ -8,7 +8,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS greenhouses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    crop TEXT NOT NULL
+    crop TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1   -- 1 启用 / 0 停用（停用后不采集不告警，历史保留）
 );
 
 CREATE TABLE IF NOT EXISTS sensor_readings (
@@ -83,6 +84,10 @@ def init_db():
         }.items():
             if col not in cols:
                 conn.execute(ddl)
+        # 兼容旧库：greenhouses 增加启用状态
+        gh_cols = {r[1] for r in conn.execute("PRAGMA table_info(greenhouses)")}
+        if "active" not in gh_cols:
+            conn.execute("ALTER TABLE greenhouses ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
         # 首次运行写入默认大棚
         if conn.execute("SELECT COUNT(*) FROM greenhouses").fetchone()[0] == 0:
             conn.executemany(

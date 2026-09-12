@@ -57,6 +57,17 @@ class TaskUpdate(BaseModel):
     status: str = Field(pattern="^(pending|done|cancelled)$")
 
 
+class GreenhouseIn(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    crop: str = Field(min_length=1, max_length=50)
+
+
+class GreenhouseUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=50)
+    crop: str | None = Field(default=None, min_length=1, max_length=50)
+    active: bool | None = None
+
+
 class ResolveIn(BaseModel):
     handler: str = ""
     note: str = ""
@@ -86,9 +97,51 @@ class NotifyConfigIn(BaseModel):
 
 @app.get("/api/greenhouses")
 def list_greenhouses():
+    """返回全部大棚（含已停用），由前端按场景过滤"""
     conn = get_conn()
     try:
         return [dict(r) for r in conn.execute("SELECT * FROM greenhouses ORDER BY id")]
+    finally:
+        conn.close()
+
+
+@app.post("/api/greenhouses", status_code=201)
+def add_greenhouse(body: GreenhouseIn):
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO greenhouses(name, crop) VALUES (?, ?)",
+            (body.name.strip(), body.crop.strip()),
+        )
+        conn.commit()
+        return {"id": cur.lastrowid}
+    finally:
+        conn.close()
+
+
+@app.patch("/api/greenhouses/{gh_id}")
+def update_greenhouse(gh_id: int, body: GreenhouseUpdate):
+    """修改名称/作物/启停状态；停用后不再采集，历史记录保留"""
+    updates, params = [], []
+    if body.name is not None:
+        updates.append("name=?")
+        params.append(body.name.strip())
+    if body.crop is not None:
+        updates.append("crop=?")
+        params.append(body.crop.strip())
+    if body.active is not None:
+        updates.append("active=?")
+        params.append(1 if body.active else 0)
+    if not updates:
+        raise HTTPException(400, "没有需要更新的字段")
+    params.append(gh_id)
+    conn = get_conn()
+    try:
+        cur = conn.execute(f"UPDATE greenhouses SET {', '.join(updates)} WHERE id=?", params)
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "大棚不存在")
+        return {"ok": True}
     finally:
         conn.close()
 

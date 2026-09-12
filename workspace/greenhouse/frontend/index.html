@@ -87,8 +87,11 @@
 
     <!-- 概览 -->
     <div v-if="tab==='overview'">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+        <button class="btn" @click="ghModal.show=true">⚙ 大棚管理</button>
+      </div>
       <div class="cards">
-        <div class="card" v-for="r in latest" :key="r.greenhouse_id">
+        <div class="card" v-for="r in latestActive" :key="r.greenhouse_id">
           <h3>{{ r.greenhouse_name }} <span class="crop">{{ r.crop }}</span></h3>
           <div class="metrics">
             <div class="metric" :class="{bad: outOfRange('temperature', r.temperature)}">
@@ -112,7 +115,7 @@
       <div class="card">
         <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <select v-model="chartGh">
-            <option v-for="g in greenhouses" :key="g.id" :value="g.id">{{ g.name }}</option>
+            <option v-for="g in greenhouses" :key="g.id" :value="g.id">{{ g.name }}{{ g.active ? '' : '（已停用）' }}</option>
           </select>
           <select v-model="chartMetric">
             <option value="temperature">温度</option>
@@ -136,7 +139,7 @@
           </select></div>
         <div><label>大棚</label>
           <select v-model="taskForm.greenhouse_id">
-            <option v-for="g in greenhouses" :key="g.id" :value="g.id">{{ g.name }}（{{ g.crop }}）</option>
+            <option v-for="g in activeGreenhouses" :key="g.id" :value="g.id">{{ g.name }}（{{ g.crop }}）</option>
           </select></div>
         <div><label>计划日期</label><input type="date" v-model="taskForm.planned_date" required></div>
         <div style="flex:1;min-width:180px"><label>任务说明</label><input v-model="taskForm.title" placeholder="如：追施钾肥" required style="width:100%"></div>
@@ -166,7 +169,7 @@
       <form @submit.prevent="addIrrigation">
         <div><label>大棚</label>
           <select v-model="irrForm.greenhouse_id">
-            <option v-for="g in greenhouses" :key="g.id" :value="g.id">{{ g.name }}（{{ g.crop }}）</option>
+            <option v-for="g in activeGreenhouses" :key="g.id" :value="g.id">{{ g.name }}（{{ g.crop }}）</option>
           </select></div>
         <div><label>灌溉量（升）</label><input type="number" min="1" step="0.5" v-model.number="irrForm.amount_l" required></div>
         <div><label>方式</label>
@@ -257,11 +260,42 @@
         </div>
       </div>
     </div>
+    <!-- 大棚管理弹窗 -->
+    <div v-if="ghModal.show" class="modal-mask" @click.self="ghModal.show=false">
+      <div class="modal" style="width:560px">
+        <h3>大棚管理</h3>
+        <table style="box-shadow:none">
+          <thead><tr><th>名称</th><th>作物</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr v-for="g in greenhouses" :key="g.id">
+              <td><input v-model="g.name" style="width:110px"></td>
+              <td><input v-model="g.crop" style="width:110px"></td>
+              <td><span class="tag" :class="g.active ? 'done' : 'cancelled'">{{ g.active ? '启用中' : '已停用' }}</span></td>
+              <td style="white-space:nowrap">
+                <button class="btn sm" @click="saveGreenhouse(g)">保存</button>
+                <button class="btn sm gray" @click="toggleGreenhouse(g)">{{ g.active ? '停用' : '启用' }}</button>
+              </td>
+            </tr>
+            <tr>
+              <td><input v-model="newGh.name" placeholder="如：4号棚" style="width:110px"></td>
+              <td><input v-model="newGh.crop" placeholder="如：辣椒" style="width:110px"></td>
+              <td colspan="2"><button class="btn sm" @click="addGreenhouse" :disabled="!newGh.name || !newGh.crop">＋ 新增大棚</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div style="font-size:12px;color:#999;margin-top:10px">
+          停用后该棚不再采集数据和产生告警，历史读数、任务与告警记录仍然保留可查。
+        </div>
+        <div class="actions">
+          <button class="btn gray" @click="ghModal.show=false">关闭</button>
+        </div>
+      </div>
+    </div>
   </main>
 </div>
 
 <script>
-const { createApp, ref, reactive, onMounted, watch, nextTick } = Vue;
+const { createApp, ref, reactive, computed, onMounted, watch, nextTick } = Vue;
 
 const RANGES = { temperature: [15, 32], humidity: [40, 85], soil_moisture: [20, 60], light: [2000, 80000] };
 
@@ -290,6 +324,15 @@ createApp({
     const notifyTestMsg = ref('');
     const notifyTestOk = ref(false);
     const handleModal = reactive({ show: false, id: null, isResolve: true, message: '', handler: '', note: '' });
+    const ghModal = reactive({ show: false });
+    const newGh = reactive({ name: '', crop: '' });
+
+    // 启用中的大棚：用于任务/灌溉表单和概览卡片
+    const activeGreenhouses = computed(() => greenhouses.value.filter(g => g.active));
+    const latestActive = computed(() => {
+      const ids = new Set(activeGreenhouses.value.map(g => g.id));
+      return latest.value.filter(r => ids.has(r.greenhouse_id));
+    });
 
     const api = async (url, opts) => {
       const res = await fetch(url, opts && {
@@ -386,6 +429,20 @@ createApp({
         : r.status === 'none' ? '未配置任何外部渠道' : `❌ 推送失败：${r.error}`;
     };
 
+    const addGreenhouse = async () => {
+      await api('/api/greenhouses', { method: 'POST', body: { ...newGh } });
+      newGh.name = ''; newGh.crop = '';
+      refresh();
+    };
+    const saveGreenhouse = async (g) => {
+      await api(`/api/greenhouses/${g.id}`, { method: 'PATCH', body: { name: g.name, crop: g.crop } });
+      refresh();
+    };
+    const toggleGreenhouse = async (g) => {
+      await api(`/api/greenhouses/${g.id}`, { method: 'PATCH', body: { active: !g.active } });
+      refresh();
+    };
+
     // 简易折线图
     const drawChart = async () => {
       await nextTick();
@@ -432,9 +489,11 @@ createApp({
 
     return { tabs, tab, greenhouses, latest, tasks, irrigations, alerts, activeAlerts, dash,
              chartGh, chartMetric, chartCanvas, taskForm, irrForm,
-             notifyCfg, notifyTestMsg, notifyTestOk, handleModal,
+             notifyCfg, notifyTestMsg, notifyTestOk, handleModal, ghModal, newGh,
+             activeGreenhouses, latestActive,
              outOfRange, taskTypeName, statusName, addTask, setTaskStatus, addIrrigation,
-             openHandle, submitHandle, saveNotifyConfig, testNotify };
+             openHandle, submitHandle, saveNotifyConfig, testNotify,
+             addGreenhouse, saveGreenhouse, toggleGreenhouse };
   },
 }).mount('#app');
 </script>

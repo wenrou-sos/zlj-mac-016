@@ -173,10 +173,10 @@ def save_reading_and_alerts(reading: dict):
 
 
 def simulate_once():
-    """对所有大棚采集一轮数据"""
+    """对所有启用中的大棚采集一轮数据（停用的棚不再产生新读数和告警）"""
     conn = get_conn()
     try:
-        ids = [r["id"] for r in conn.execute("SELECT id FROM greenhouses")]
+        ids = [r["id"] for r in conn.execute("SELECT id FROM greenhouses WHERE active=1")]
     finally:
         conn.close()
     for gh_id in ids:

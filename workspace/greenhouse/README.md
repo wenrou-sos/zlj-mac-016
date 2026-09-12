@@ -21,6 +21,7 @@ pip install fastapi "uvicorn[standard]"
 | 模块 | 说明 |
 |------|------|
 | 环境概览 | 各大棚实时温度/湿度/光照/土壤湿度卡片，越限标红；历史趋势折线图 |
+| 大棚管理 | 概览页「⚙ 大棚管理」：新增大棚、修改名称/作物、停用/启用；停用后不再采集和告警，历史读数、任务、告警仍可查（历史图表中标注"已停用"） |
 | 任务管理 | 安排施肥、浇水、采收任务，支持完成/取消 |
 | 灌溉记录 | 记录灌溉量、方式（滴灌/喷灌/漫灌） |
 | 告警中心 | 传感器越限自动生成告警（警告/严重两级），恢复后自动解除；处理时可登记处理人和处理备注，已处理的告警也可补记 |
@@ -76,6 +77,7 @@ greenhouse/
 
 ## 主要 API
 
+- `GET/POST /api/greenhouses`，`PATCH /api/greenhouses/{id}` 大棚新增/改名/启停
 - `GET /api/sensors/latest` 各大棚最新读数
 - `GET /api/sensors/history?greenhouse_id=1&limit=60` 历史数据
 - `GET/POST /api/tasks`，`PATCH /api/tasks/{id}` 任务管理
